@@ -27,9 +27,15 @@ AsyncSessionLocal = sessionmaker(engine, class_=AsyncSession, expire_on_commit=F
 
 app = FastAPI(title="HOS API")
 
+# Browsers on Vercel (*.vercel.app) need to match; local dev uses localhost.
+# Set CORS_ORIGIN_REGEX in Railway to tighten (e.g. your exact Vercel URL only).
+_default_cors = (
+    r"https?://(localhost|127\.0\.0\.1):\d+"
+    r"|https://[\w.-]+\.vercel\.app"
+)
 app.add_middleware(
     CORSMiddleware,
-    allow_origin_regex=r"https?://(localhost|127\.0\.0\.1):\d+",
+    allow_origin_regex=os.getenv("CORS_ORIGIN_REGEX", _default_cors),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
