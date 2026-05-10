@@ -27,16 +27,21 @@ AsyncSessionLocal = sessionmaker(engine, class_=AsyncSession, expire_on_commit=F
 
 app = FastAPI(title="HOS API")
 
-# Browsers on Vercel (*.vercel.app) need to match; local dev uses localhost.
-# Set CORS_ORIGIN_REGEX in Railway to tighten (e.g. your exact Vercel URL only).
-_default_cors = (
-    r"https?://(localhost|127\.0\.0\.1):\d+"
-    r"|https://[\w.-]+\.vercel\.app"
-)
+# CORS from Vercel / any domain fails if this is too strict or if Railway has a bad
+# CORS_ORIGIN_REGEX from older deploys — use allow_origins * by default (no cookie auth).
+# Override on Railway with CORS_ALLOW_ORIGINS=https://yourapp.vercel.app,http://localhost:5173
+_cors_env = (os.getenv("CORS_ALLOW_ORIGINS") or "*").strip()
+if _cors_env == "*":
+    _cors_origins = ["*"]
+else:
+    _cors_origins = [x.strip() for x in _cors_env.split(",") if x.strip()]
+    if not _cors_origins:
+        _cors_origins = ["*"]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origin_regex=os.getenv("CORS_ORIGIN_REGEX", _default_cors),
-    allow_credentials=True,
+    allow_origins=_cors_origins,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -83,7 +88,8 @@ async def home():
                     <p>This backend provides API endpoints, not the full frontend UI.</p>
                     <ul>
                         <li><a href="/docs">API docs (Swagger)</a></li>
-                        <li><a href="/api/health">Health check</a></li>
+                        <li><a href="/health">Health (root)</a></li>
+                        <li><a href="/api/health">Health (API prefix)</a></li>
                         <li><a href="/api/users">Users API</a></li>
                         <li><a href="/api/notifications">Notifications API</a></li>
                     </ul>
@@ -102,6 +108,12 @@ async def get_session() -> AsyncSession:
 
 class Health(BaseModel):
     status: str
+
+
+@app.get("/health", response_model=Health)
+async def health_root():
+    """Same payload as /api/health — some gateways strip path prefixes."""
+    return {"status": "ok"}
 
 
 @app.get("/api/health", response_model=Health)
