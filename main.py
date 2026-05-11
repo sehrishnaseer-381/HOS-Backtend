@@ -1,11 +1,12 @@
 import os
-from typing import List
+from typing import List, Optional
 
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel
+from sqlalchemy import func, select, text
 from sqlalchemy.exc import DBAPIError, IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
@@ -92,6 +93,7 @@ async def home():
                         <li><a href="/api/health">Health (API prefix)</a></li>
                         <li><a href="/api/users">Users API</a></li>
                         <li><a href="/api/notifications">Notifications API</a></li>
+                        <li><a href="/api/db-check">Database check (Postgres/SQLite)</a></li>
                     </ul>
                     <p><small>Run from the <code>backend</code> folder:
                     <code>uvicorn main:app --reload --port 8000</code></small></p>
@@ -108,6 +110,44 @@ async def get_session() -> AsyncSession:
 
 class Health(BaseModel):
     status: str
+
+
+class DbCheckResponse(BaseModel):
+    ok: bool
+    backend: str
+    users_count: int = 0
+    notifications_count: int = 0
+    hint: Optional[str] = None
+
+
+def _database_backend_label() -> str:
+    url = DATABASE_URL or ""
+    if "postgresql" in url or "postgres" in url:
+        return "postgres"
+    if "sqlite" in url:
+        return "sqlite"
+    return "unknown"
+
+
+@app.get("/api/db-check", response_model=DbCheckResponse)
+async def db_check(session: AsyncSession = Depends(get_session)):
+    """Runs SELECT 1 and counts rows — use to verify Postgres from /docs or the dashboard."""
+    try:
+        await session.execute(text("SELECT 1"))
+        uc = await session.scalar(select(func.count(models.User.id)))
+        nc = await session.scalar(select(func.count(models.Notification.id)))
+        return DbCheckResponse(
+            ok=True,
+            backend=_database_backend_label(),
+            users_count=int(uc or 0),
+            notifications_count=int(nc or 0),
+        )
+    except Exception:
+        return DbCheckResponse(
+            ok=False,
+            backend=_database_backend_label(),
+            hint="Cannot reach database — fix DATABASE_URL and redeploy, or confirm Postgres allows this host.",
+        )
 
 
 @app.get("/health", response_model=Health)
