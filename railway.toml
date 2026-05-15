@@ -1,0 +1,6 @@
+# Railway deploy (set service Root Directory to this `backend` folder if repo is monorepo).
+[build]
+builder = "NIXPACKS"
+
+[deploy]
+startCommand = "uvicorn main:app --host 0.0.0.0 --port $PORT"

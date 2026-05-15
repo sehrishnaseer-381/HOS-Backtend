@@ -17,10 +17,46 @@ import schemas
 
 load_dotenv()
 
-DATABASE_URL = os.getenv("DATABASE_URL") or "sqlite+aiosqlite:///./hos_local.db"
+
+def normalize_database_url(raw: str) -> str:
+    """
+    Railway sets DATABASE_URL as postgres:// or postgresql:// — SQLAlchemy async
+    MUST use postgresql+asyncpg:// or it tries psycopg2 (not installed → crash).
+
+    Handles BOM, uppercase schemes, and accidental postgresql+psycopg2 URLs.
+    """
+    s = (raw or "").strip().strip("\ufeff")
+    if not s or "://" not in s:
+        return s
+
+    scheme, rest = s.split("://", 1)
+    scheme_lower = scheme.lower()
+
+    if scheme_lower.startswith("sqlite"):
+        return s
+    if scheme_lower == "postgresql+asyncpg":
+        return s
+    # Wrong sync/async drivers SQLAlchemy might infer → force asyncpg
+    if scheme_lower in ("postgresql+psycopg2", "postgresql+psycopg"):
+        return f"postgresql+asyncpg://{rest}"
+
+    if scheme_lower in ("postgres", "postgresql"):
+        return f"postgresql+asyncpg://{rest}"
+
+    return s
+
+
+# Railway may expose DATABASE_URL or (older templates) POSTGRES_URL / DATABASE_PRIVATE_URL
+_raw_db = (
+    os.getenv("DATABASE_URL")
+    or os.getenv("DATABASE_PRIVATE_URL")
+    or os.getenv("POSTGRES_URL")
+    or "sqlite+aiosqlite:///./hos_local.db"
+)
+DATABASE_URL = normalize_database_url(_raw_db)
 
 _engine_kwargs = {"future": True, "echo": False}
-if DATABASE_URL.startswith("postgresql"):
+if "postgresql" in DATABASE_URL:
     _engine_kwargs["pool_pre_ping"] = True
 
 engine = create_async_engine(DATABASE_URL, **_engine_kwargs)
@@ -230,11 +266,29 @@ async def mark_all_notifications_read(session: AsyncSession = Depends(get_sessio
     return {"updated": n}
 
 
+def _mask_db_url(url: str) -> str:
+    """Log-friendly: hide password if present."""
+    if "@" not in url or "://" not in url:
+        return url
+    try:
+        scheme, rest = url.split("://", 1)
+        if "@" in rest:
+            creds, hostpart = rest.rsplit("@", 1)
+            if ":" in creds:
+                user, _ = creds.split(":", 1)
+                return f"{scheme}://{user}:***@{hostpart}"
+        return url
+    except Exception:
+        return "<database url>"
+
+
 @app.on_event("startup")
 async def startup():
+    print(f"HOS API startup — database: {_database_backend_label()} — {_mask_db_url(DATABASE_URL)}")
     try:
         async with engine.begin() as conn:
             await conn.run_sync(models.Base.metadata.create_all)
+        print("HOS API: tables ensured (create_all OK).")
     except Exception as e:
         print(f"WARN: Database init skipped: {e}")
         return
